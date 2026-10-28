@@ -1,0 +1,169 @@
+@startuml component-diagram
+!theme plain
+skinparam componentBackgroundColor #EDF4FF
+skinparam componentBorderColor #4A90D9
+skinparam arrowColor #4A90D9
+skinparam databaseBackgroundColor #FFF8E7
+skinparam databaseBorderColor #D4870A
+skinparam cloudBackgroundColor #F0FFF4
+skinparam cloudBorderColor #2E8B57
+skinparam nodeBackgroundColor #F9F0FF
+skinparam nodeBorderColor #7B2FBE
+skinparam packageStyle rectangle
+skinparam linetype ortho
+
+title Unified Patient Access & Clinical Intelligence Platform\nComponent Diagram
+
+'─────────────────────────────────────────────────────────────
+' Presentation Layer
+'─────────────────────────────────────────────────────────────
+package "Presentation Layer (SPA)" {
+  [Patient Portal\n(Angular/React)] as PatientUI
+  [Staff Dashboard\n(Angular/React)] as StaffUI
+  [Admin Console\n(Angular/React)] as AdminUI
+}
+
+'─────────────────────────────────────────────────────────────
+' API Gateway / BFF
+'─────────────────────────────────────────────────────────────
+package "API Gateway" {
+  [API Gateway / BFF\n(ASP.NET Core)] as APIGW
+  note right of APIGW
+    JWT validation
+    RBAC enforcement
+    Rate limiting
+    TLS 1.2+ termination
+  end note
+}
+
+'─────────────────────────────────────────────────────────────
+' Core Application Services
+'─────────────────────────────────────────────────────────────
+package "Core Application Services" {
+  [Auth Service\n(JWT / bcrypt)] as AuthSvc
+  [Appointment Service] as ApptSvc
+  [Intake Service] as IntakeSvc
+  [Insurance Validation Service] as InsSvc
+  [Admin Service] as AdminSvc
+  [Audit Service] as AuditSvc
+}
+
+'─────────────────────────────────────────────────────────────
+' Background / Async Services
+'─────────────────────────────────────────────────────────────
+package "Background Services" {
+  [Slot-Swap Engine\n(Event-driven)] as SlotSwap
+  [Reminder Scheduler\n(Cron / Windows Service)] as ReminderSvc
+}
+
+'─────────────────────────────────────────────────────────────
+' Clinical Intelligence Services
+'─────────────────────────────────────────────────────────────
+package "Clinical Intelligence Services" {
+  [Document Processing Service] as DocSvc
+  [NLP / AI Extraction Engine\n(Open-source NLP)] as NlpEngine
+  [Patient 360 Aggregator] as P360Svc
+  [Medical Coding Service\n(ICD-10 / CPT)] as CodingSvc
+  [No-Show Risk Engine\n(Rule-based)] as RiskEngine
+}
+
+'─────────────────────────────────────────────────────────────
+' Data Layer
+'─────────────────────────────────────────────────────────────
+package "Data Layer" {
+  database "PostgreSQL\n(Primary Store)" as PgDB
+  database "Upstash Redis\n(Session Cache &\nSlot-Swap Lock)" as Redis
+  [File Storage\n(PDF / Clinical Docs)] as FileStore
+}
+
+'─────────────────────────────────────────────────────────────
+' External Services
+'─────────────────────────────────────────────────────────────
+cloud "External Services" {
+  [Email Provider\n(SMTP / SendGrid free)] as EmailSvc
+  [SMS Provider\n(Twilio free tier)] as SmsSvc
+  [Google Calendar API\n(Free)] as GCalAPI
+  [ICS Download\n(.ics generation)] as IcsSvc
+}
+
+'─────────────────────────────────────────────────────────────
+' Relationships — UI to Gateway
+'─────────────────────────────────────────────────────────────
+PatientUI --> APIGW : HTTPS / REST
+StaffUI   --> APIGW : HTTPS / REST
+AdminUI   --> APIGW : HTTPS / REST
+
+'─────────────────────────────────────────────────────────────
+' Relationships — Gateway to Core Services
+'─────────────────────────────────────────────────────────────
+APIGW --> AuthSvc    : /auth/**
+APIGW --> ApptSvc    : /appointments/**
+APIGW --> IntakeSvc  : /intake/**
+APIGW --> InsSvc     : /insurance/**
+APIGW --> AdminSvc   : /admin/**
+APIGW --> DocSvc     : /documents/**
+APIGW --> P360Svc    : /patients/360/**
+APIGW --> CodingSvc  : /coding/**
+APIGW --> AuditSvc   : /audit/**
+
+'─────────────────────────────────────────────────────────────
+' Relationships — Core Services to Data
+'─────────────────────────────────────────────────────────────
+AuthSvc    --> PgDB   : user credentials
+AuthSvc    --> Redis  : session tokens
+ApptSvc    --> PgDB   : slots, bookings
+ApptSvc    --> Redis  : slot reservation lock
+IntakeSvc  --> PgDB   : intake forms
+InsSvc     --> PgDB   : dummy insurance records
+AdminSvc   --> PgDB   : user accounts
+AuditSvc   --> PgDB   : audit log (append-only)
+DocSvc     --> PgDB   : document metadata
+DocSvc     --> FileStore : PDF storage
+P360Svc    --> PgDB   : patient records
+CodingSvc  --> PgDB   : coding sessions
+
+'─────────────────────────────────────────────────────────────
+' Relationships — Background Services
+'─────────────────────────────────────────────────────────────
+ApptSvc    ..> SlotSwap       : slot-free event
+SlotSwap   --> PgDB           : update bookings
+SlotSwap   --> Redis          : atomic slot lock
+SlotSwap   ..> ReminderSvc    : trigger swap notification
+SlotSwap   --> AuditSvc       : log swap event
+
+ApptSvc    ..> ReminderSvc    : schedule reminders
+ReminderSvc --> PgDB          : reminder records
+ReminderSvc --> EmailSvc      : 24h email reminder
+ReminderSvc --> SmsSvc        : 2h SMS reminder
+ReminderSvc --> GCalAPI       : Google Calendar link
+ReminderSvc --> IcsSvc        : Outlook .ics link
+
+'─────────────────────────────────────────────────────────────
+' Relationships — Clinical Intelligence
+'─────────────────────────────────────────────────────────────
+DocSvc     ..> NlpEngine      : extract fields
+NlpEngine  --> PgDB           : store extracted fields
+NlpEngine  ..> P360Svc        : trigger aggregation
+P360Svc    ..> CodingSvc      : trigger code suggestion
+CodingSvc  ..> NlpEngine      : analyse aggregated record
+
+ApptSvc    ..> RiskEngine     : compute no-show risk
+InsSvc     ..> RiskEngine     : insurance status input
+RiskEngine --> PgDB           : store risk score
+
+'─────────────────────────────────────────────────────────────
+' Audit fan-out
+'─────────────────────────────────────────────────────────────
+AuthSvc   ..> AuditSvc : login / logout events
+ApptSvc   ..> AuditSvc : booking events
+IntakeSvc ..> AuditSvc : intake events
+DocSvc    ..> AuditSvc : document events
+CodingSvc ..> AuditSvc : coding events
+AdminSvc  ..> AuditSvc : admin actions
+
+'─────────────────────────────────────────────────────────────
+' Confirmation emails
+'─────────────────────────────────────────────────────────────
+ApptSvc   --> EmailSvc : booking confirmation PDF
+
+@enduml

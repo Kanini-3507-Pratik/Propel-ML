@@ -1,0 +1,64 @@
+@startuml uc-system-overview
+!theme plain
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+skinparam usecaseBackgroundColor #EDF4FF
+skinparam usecaseBorderColor #4A90D9
+
+title Unified Patient Access & Clinical Intelligence Platform\nSystem-Level Use Case Diagram
+
+actor Patient
+actor Staff
+actor Admin
+actor ":System\n(Background)" as Sys <<system>>
+
+rectangle "Patient Access & Booking" {
+  usecase "Register Account\n[UC-001]" as UC001
+  usecase "Log In\n[UC-002]" as UC002
+  usecase "Book Appointment\n[UC-003]" as UC003
+  usecase "Complete Intake\n[UC-005]" as UC005
+  usecase "Upload Clinical Documents\n[UC-007]" as UC007
+}
+
+rectangle "Scheduling Automation" {
+  usecase "Dynamic Slot Swap\n[UC-004]" as UC004
+  usecase "Send Reminders" as REM
+  usecase "Calendar Sync" as CAL
+}
+
+rectangle "Staff Operations" {
+  usecase "Walk-In Booking\n[UC-006]" as UC006
+  usecase "Manage Same-Day Queue" as QUEUE
+  usecase "Review Clinical Data\n[UC-007]" as REV
+  usecase "Approve Medical Codes\n[UC-008]" as UC008
+}
+
+rectangle "Admin" {
+  usecase "Manage Users\n[UC-009]" as UC009
+  usecase "View Audit Log\n[UC-010]" as UC010
+}
+
+Patient --> UC001
+Patient --> UC002
+Patient --> UC003
+Patient --> UC005
+Patient --> UC007
+
+UC003 ..> UC004 : <<triggers>>
+Sys --> UC004
+Sys --> REM
+Sys --> CAL
+UC003 ..> REM : <<include>>
+UC003 ..> CAL : <<include>>
+
+Staff --> UC002
+Staff --> UC006
+Staff --> QUEUE
+Staff --> REV
+Staff --> UC008
+
+Admin --> UC002
+Admin --> UC009
+Admin --> UC010
+
+@enduml

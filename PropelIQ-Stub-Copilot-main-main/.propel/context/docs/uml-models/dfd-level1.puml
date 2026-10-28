@@ -1,0 +1,182 @@
+@startuml dfd-level1
+!theme plain
+skinparam rectangleBackgroundColor #EDF4FF
+skinparam rectangleBorderColor #4A90D9
+skinparam databaseBackgroundColor #FFF8E7
+skinparam databaseBorderColor #D4870A
+skinparam arrowColor #4A90D9
+skinparam actorBackgroundColor #F0FFF4
+skinparam actorBorderColor #2E8B57
+skinparam circleBackgroundColor #F9F0FF
+skinparam circleBorderColor #7B2FBE
+
+title Unified Patient Access & Clinical Intelligence Platform\nData Flow Diagram — Level 1
+
+' ─────────────────────────────────────────────
+' External Entities
+' ─────────────────────────────────────────────
+actor "Patient" as Patient
+actor "Staff" as Staff
+actor "Admin" as Admin
+actor "Email Provider" as EmailExt
+actor "SMS Provider" as SmsExt
+actor "Calendar Services" as CalExt
+
+' ─────────────────────────────────────────────
+' Data Stores
+' ─────────────────────────────────────────────
+database "DS1: Users &\nSessions" as DS_Users
+database "DS2: Appointments\n& Slots" as DS_Appts
+database "DS3: Waitlist" as DS_Waitlist
+database "DS4: Intake\nForms" as DS_Intake
+database "DS5: Insurance\nRecords" as DS_Insurance
+database "DS6: Clinical\nDocuments" as DS_Docs
+database "DS7: Patient\nRecord (360°)" as DS_Record
+database "DS8: Coding\nSessions" as DS_Coding
+database "DS9: Audit\nLog" as DS_Audit
+database "DS10: Reminders" as DS_Reminders
+database "DS11: Risk\nScores" as DS_Risk
+
+' ─────────────────────────────────────────────
+' Processes
+' ─────────────────────────────────────────────
+rectangle "P1\nAuthentication &\nSession Mgmt" as P1
+rectangle "P2\nAppointment\nBooking" as P2
+rectangle "P3\nSlot-Swap\nEngine" as P3
+rectangle "P4\nReminder &\nCalendar Sync" as P4
+rectangle "P5\nPatient\nIntake" as P5
+rectangle "P6\nInsurance\nValidation" as P6
+rectangle "P7\nClinical Doc\nExtraction" as P7
+rectangle "P8\nPatient 360°\nAggregation" as P8
+rectangle "P9\nMedical\nCoding" as P9
+rectangle "P10\nNo-Show\nRisk Engine" as P10
+rectangle "P11\nAdmin & User\nManagement" as P11
+rectangle "P12\nAudit\nLogging" as P12
+
+' ─────────────────────────────────────────────
+' P1 — Authentication
+' ─────────────────────────────────────────────
+Patient --> P1 : credentials / register
+Staff   --> P1 : credentials
+Admin   --> P1 : credentials
+P1 --> DS_Users   : write user record / hash password
+DS_Users --> P1   : stored credentials
+P1 --> Patient    : session token / role dashboard
+P1 --> Staff      : session token / role dashboard
+P1 --> Admin      : session token / role dashboard
+P1 ..> P12        : login / logout event
+
+' ─────────────────────────────────────────────
+' P2 — Appointment Booking
+' ─────────────────────────────────────────────
+Patient --> P2 : slot search, booking request
+Staff   --> P2 : walk-in booking
+P2 --> DS_Appts   : read available slots / write booking
+DS_Appts --> P2   : slot availability
+P2 --> DS_Waitlist : write waitlist entry (if preferred)
+P2 ..> P6         : trigger insurance check
+P2 ..> P10        : trigger risk score
+P2 --> Patient    : booking reference + PDF confirmation
+P2 --> EmailExt   : send confirmation email
+P2 ..> P12        : booking / cancellation event
+P2 ..> P4         : enqueue reminder
+
+' ─────────────────────────────────────────────
+' P3 — Slot-Swap Engine (background)
+' ─────────────────────────────────────────────
+DS_Appts   --> P3   : slot-free event (cancellation)
+DS_Waitlist --> P3  : waitlist entries for freed slot
+P3 --> DS_Appts    : update booking (atomic)
+P3 --> DS_Waitlist : remove fulfilled entry
+P3 --> Patient     : swap notification
+P3 --> EmailExt    : swap confirmation email
+P3 --> SmsExt      : swap SMS
+P3 ..> P12         : slot-swap audit event
+
+' ─────────────────────────────────────────────
+' P4 — Reminders & Calendar Sync
+' ─────────────────────────────────────────────
+DS_Reminders --> P4 : scheduled reminders
+DS_Appts     --> P4 : appointment details
+P4 --> EmailExt     : 24h email reminder
+P4 --> SmsExt       : 2h SMS reminder
+P4 --> CalExt       : Google Calendar / Outlook .ics
+P4 --> DS_Reminders : update sent status
+P4 ..> P12          : reminder sent event
+
+' ─────────────────────────────────────────────
+' P5 — Patient Intake
+' ─────────────────────────────────────────────
+Patient --> P5 : intake responses (AI or manual)
+P5 --> DS_Intake   : save / auto-save intake form
+DS_Intake --> P5   : resume partial intake
+P5 --> Patient     : intake progress / confirmation
+Staff --> P5       : view submitted intake
+P5 ..> P12         : intake submission / edit event
+
+' ─────────────────────────────────────────────
+' P6 — Insurance Validation
+' ─────────────────────────────────────────────
+Patient --> P6 : insurance name + member ID
+P6 --> DS_Insurance : read dummy records (soft check)
+DS_Insurance --> P6 : match result
+P6 --> Patient      : Verified / Not Found / Mismatch
+P6 --> Staff        : validation status
+P6 ..> P10          : insurance status for risk score
+
+' ─────────────────────────────────────────────
+' P7 — Clinical Document Extraction
+' ─────────────────────────────────────────────
+Patient --> P7 : upload PDF
+Staff   --> P7 : upload clinical notes (PDF / text)
+P7 --> DS_Docs : store document + extracted fields
+DS_Docs --> P7 : extracted field set
+P7 --> Staff   : extraction review panel
+Staff --> P7   : accept / correct fields
+P7 ..> P8      : trigger 360° aggregation
+P7 ..> P12     : upload / extraction / review event
+
+' ─────────────────────────────────────────────
+' P8 — Patient 360° Aggregation
+' ─────────────────────────────────────────────
+DS_Docs    --> P8 : accepted extracted fields
+DS_Intake  --> P8 : intake data
+P8 --> DS_Record  : write/update patient record
+DS_Record  --> P8 : existing patient record (de-dup)
+P8 --> Staff      : 360° Patient View
+P8 ..> P9         : trigger code suggestion
+P8 ..> P12        : record update event
+
+' ─────────────────────────────────────────────
+' P9 — Medical Coding
+' ─────────────────────────────────────────────
+DS_Record --> P9  : aggregated patient data
+P9 --> DS_Coding  : write code suggestions + session
+Staff --> P9      : review / accept / override codes
+P9 --> DS_Coding  : finalize coding record
+P9 ..> P12        : coding session event
+
+' ─────────────────────────────────────────────
+' P10 — No-Show Risk Engine
+' ─────────────────────────────────────────────
+DS_Appts    --> P10 : prior no-show count, lead time
+DS_Insurance --> P10 : insurance validation status
+P10 --> DS_Risk    : write risk score
+DS_Risk --> Staff  : no-show risk dashboard
+
+' ─────────────────────────────────────────────
+' P11 — Admin & User Management
+' ─────────────────────────────────────────────
+Admin --> P11       : create / update / deactivate users
+P11 --> DS_Users    : write user accounts / roles
+DS_Users --> P11    : current user list
+P11 --> Admin       : user management confirmation
+P11 ..> P12         : admin action event
+
+' ─────────────────────────────────────────────
+' P12 — Audit Logging (append-only)
+' ─────────────────────────────────────────────
+P12 --> DS_Audit   : append-only log entry
+DS_Audit --> Admin : filtered log query + CSV export
+
+@enduml

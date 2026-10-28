@@ -1,0 +1,57 @@
+@startuml dfd-level0
+!theme plain
+skinparam rectangleBackgroundColor #EDF4FF
+skinparam rectangleBorderColor #4A90D9
+skinparam databaseBackgroundColor #FFF8E7
+skinparam databaseBorderColor #D4870A
+skinparam arrowColor #4A90D9
+skinparam actorBackgroundColor #F0FFF4
+skinparam actorBorderColor #2E8B57
+
+title Unified Patient Access & Clinical Intelligence Platform\nData Flow Diagram — Level 0 (Context Diagram)
+
+' ─────────────────────────────────────────────
+' External Entities
+' ─────────────────────────────────────────────
+actor "Patient" as Patient
+actor "Staff" as Staff
+actor "Admin" as Admin
+actor "Email\nProvider" as EmailExt
+actor "SMS\nProvider" as SmsExt
+actor "Calendar\nServices" as CalExt
+actor "Dummy\nInsurance DB" as InsExt
+
+' ─────────────────────────────────────────────
+' Central System
+' ─────────────────────────────────────────────
+rectangle "Unified Patient Access &\nClinical Intelligence Platform" as System {
+}
+
+' ─────────────────────────────────────────────
+' Data Flows — Patient
+' ─────────────────────────────────────────────
+Patient --> System : Registration data\nLogin credentials\nAppointment requests\nIntake form responses\nClinical document uploads\nInsurance details
+System --> Patient : Booking confirmations (PDF)\nReminders (email/SMS)\nCalendar links\nIntake progress\n360° Patient summary\nInsurance validation result
+
+' ─────────────────────────────────────────────
+' Data Flows — Staff
+' ─────────────────────────────────────────────
+Staff --> System : Walk-in booking details\nArrival status updates\nClinical notes (PDF)\nExtracted field reviews\nMedical code decisions
+System --> Staff : Same-day queue\nNo-show risk dashboard\nExtraction review panel\nCode suggestion panel\nPatient 360° View
+
+' ─────────────────────────────────────────────
+' Data Flows — Admin
+' ─────────────────────────────────────────────
+Admin --> System : User account create/update\nRole assignments\nAccount activation/deactivation\nAudit log queries + filters
+System --> Admin : User lists and statuses\nAudit log entries (CSV export)
+
+' ─────────────────────────────────────────────
+' Data Flows — External Services
+' ─────────────────────────────────────────────
+System --> EmailExt : Confirmation emails\nReminder emails\nSlot-swap notifications\nPDF attachment
+System --> SmsExt   : SMS reminders\nSlot-swap SMS alerts
+System --> CalExt   : Google Calendar event data\nOutlook .ics file
+System --> InsExt   : Insurance validation requests
+InsExt --> System   : Validation match results
+
+@enduml

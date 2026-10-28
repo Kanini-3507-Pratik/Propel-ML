@@ -1,0 +1,51 @@
+@startuml uc-booking-flow
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBackgroundColor #F0FFF4
+skinparam usecaseBorderColor #2E8B57
+
+title Booking & Dynamic Preferred-Slot Swap\nUse Case Detail
+
+actor Patient
+actor ":System\n(Background)" as Sys <<system>>
+actor Staff
+
+rectangle "Booking Flow [UC-003]" {
+  usecase "Search Available Slots\n[FR-011]" as SEARCH
+  usecase "Select & Confirm Slot\n[FR-012]" as SELECT
+  usecase "Join Preferred Slot Waitlist\n[FR-013]" as WAIT
+  usecase "Insurance Pre-Check\n[FR-061, FR-062]" as INS
+  usecase "Receive PDF Confirmation\n[FR-014]" as PDF
+}
+
+rectangle "Slot Swap [UC-004]" {
+  usecase "Detect Freed Slot\n[FR-021]" as DETECT
+  usecase "Atomically Reserve Slot\n[FR-025]" as RESERVE
+  usecase "Swap & Release Old Slot\n[FR-022]" as SWAP
+  usecase "Notify Patient\n[FR-023]" as NOTIFY
+}
+
+rectangle "Reminders & Sync" {
+  usecase "Send 24h Email Reminder\n[FR-031]" as REM24
+  usecase "Send 2h SMS Reminder\n[FR-032]" as REM2
+  usecase "Add to Calendar\n[FR-033, FR-034]" as SYNC
+}
+
+Patient --> SEARCH
+SEARCH --> SELECT
+SELECT --> INS
+INS --> WAIT : <<extend>>\n(optional)
+SELECT --> PDF
+
+Sys --> DETECT
+DETECT --> RESERVE
+RESERVE --> SWAP
+SWAP --> NOTIFY
+
+Sys --> REM24
+Sys --> REM2
+SELECT ..> SYNC : <<include>>
+
+Staff --> SELECT : <<on behalf of>>\nwalk-in
+
+@enduml

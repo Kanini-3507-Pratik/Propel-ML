@@ -1,0 +1,138 @@
+@startuml deployment-diagram
+!theme plain
+skinparam nodeBackgroundColor #EDF4FF
+skinparam nodeBorderColor #4A90D9
+skinparam databaseBackgroundColor #FFF8E7
+skinparam databaseBorderColor #D4870A
+skinparam cloudBackgroundColor #F0FFF4
+skinparam cloudBorderColor #2E8B57
+skinparam componentBackgroundColor #F9F0FF
+skinparam componentBorderColor #7B2FBE
+skinparam arrowColor #4A90D9
+skinparam packageStyle rectangle
+skinparam linetype ortho
+
+title Unified Patient Access & Clinical Intelligence Platform\nDeployment Diagram
+
+'─────────────────────────────────────────────────────────────
+' User Devices
+'─────────────────────────────────────────────────────────────
+node "Patient Device\n(Browser / Mobile)" as PatientDevice {
+  [SPA — Patient Portal\n(HTML5 / JS)] as PatientApp
+}
+
+node "Staff / Admin Device\n(Browser)" as StaffDevice {
+  [SPA — Staff Dashboard\n+ Admin Console\n(HTML5 / JS)] as StaffApp
+}
+
+'─────────────────────────────────────────────────────────────
+' Frontend Hosting (Free Tier)
+'─────────────────────────────────────────────────────────────
+cloud "Frontend Hosting\n(Vercel / Netlify — Free Tier)" as FrontendHost {
+  [Static SPA Bundle\n(Build Artefact)] as SPABundle
+  note right of SPABundle
+    CDN-delivered, HTTPS enforced
+    Environment: production
+  end note
+}
+
+'─────────────────────────────────────────────────────────────
+' Backend — Windows Server / IIS
+'─────────────────────────────────────────────────────────────
+node "Windows Server\n(IIS Host)" as WinServer {
+
+  node "IIS Site\n(TLS 1.2+ Binding :443)" as IISSite {
+    [API Gateway / BFF\n(ASP.NET Core)] as APIGW
+  }
+
+  node "Windows Services" as WinSvc {
+    [Slot-Swap Engine\nWindows Service] as SlotSwapSvc
+    [Reminder Scheduler\nWindows Service] as ReminderSvc
+    [NLP Extraction Worker\nWindows Service] as NlpWorker
+  }
+
+  node "Application Services\n(In-Process ASP.NET Core)" as AppSvcs {
+    [Auth Service] as AuthSvc
+    [Appointment Service] as ApptSvc
+    [Intake Service] as IntakeSvc
+    [Insurance Validation Service] as InsSvc
+    [Document Processing Service] as DocSvc
+    [Patient 360 Aggregator] as P360Svc
+    [Medical Coding Service] as CodingSvc
+    [Admin Service] as AdminSvc
+    [Audit Service] as AuditSvc
+  }
+
+  folder "Local File Storage\n(PDF / Clinical Docs)" as FileStore {
+    [Uploaded PDFs\n(encrypted at rest)] as PDFStore
+  }
+}
+
+'─────────────────────────────────────────────────────────────
+' Data Stores
+'─────────────────────────────────────────────────────────────
+node "PostgreSQL Server\n(Self-hosted / Free)" as PgServer {
+  database "Platform DB\n(PostgreSQL 15+)" as PgDB
+  note bottom of PgDB
+    Encrypted at rest (TDE)
+    HIPAA-compliant storage
+  end note
+}
+
+cloud "Upstash (Free Tier)\nManaged Redis" as UpstashCloud {
+  database "Redis\n(Session Cache &\nSlot-Swap Atomic Lock)" as RedisDB
+}
+
+'─────────────────────────────────────────────────────────────
+' External Third-Party Services
+'─────────────────────────────────────────────────────────────
+cloud "External Services" as ExternalCloud {
+  [Email Provider\n(SMTP / SendGrid Free)] as EmailSvc
+  [SMS Provider\n(Twilio Free Tier)] as SmsSvc
+  [Google Calendar API\n(Free — oauth2)] as GCalAPI
+}
+
+'─────────────────────────────────────────────────────────────
+' Connections
+'─────────────────────────────────────────────────────────────
+
+' Device to CDN
+PatientDevice --> FrontendHost : HTTPS
+StaffDevice   --> FrontendHost : HTTPS
+
+' SPA to API
+PatientApp --> APIGW : HTTPS REST (TLS 1.2+)
+StaffApp   --> APIGW : HTTPS REST (TLS 1.2+)
+SPABundle  ..> APIGW : API calls at runtime
+
+' IIS to App Services
+IISSite --> AppSvcs : in-process hosting
+
+' App Services to Data
+AppSvcs --> PgDB    : TCP (5432) — encrypted
+AppSvcs --> RedisDB : TLS (6380) — session / lock
+AppSvcs --> FileStore : local I/O
+
+' Background Workers to Data
+WinSvc --> PgDB    : TCP (5432)
+WinSvc --> RedisDB : TLS (6380)
+
+' Background Workers to External
+ReminderSvc --> EmailSvc : SMTP/TLS or HTTPS
+ReminderSvc --> SmsSvc   : HTTPS
+ReminderSvc --> GCalAPI  : HTTPS
+
+' Document Processing
+DocSvc   --> NlpWorker : async job queue
+NlpWorker --> PgDB     : extracted fields
+
+' Slot-Swap Worker
+SlotSwapSvc --> PgDB    : update appointments
+SlotSwapSvc --> RedisDB : atomic SETNX lock
+SlotSwapSvc --> EmailSvc : swap notification
+SlotSwapSvc --> SmsSvc  : swap notification
+
+' Booking confirmations
+ApptSvc --> EmailSvc : confirmation PDF (HTTPS)
+
+@enduml

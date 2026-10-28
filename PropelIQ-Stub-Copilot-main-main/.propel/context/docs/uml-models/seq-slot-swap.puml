@@ -1,0 +1,83 @@
+@startuml seq-slot-swap
+!theme plain
+skinparam sequenceArrowColor #2E8B57
+skinparam sequenceParticipantBackgroundColor #F0FFF4
+skinparam sequenceParticipantBorderColor #2E8B57
+skinparam sequenceActorBackgroundColor #EDF4FF
+skinparam sequenceActorBorderColor #4A90D9
+skinparam sequenceGroupBackgroundColor #FFFBE6
+skinparam noteBackgroundColor #FFFBE6
+skinparam noteBorderColor #D4870A
+
+title Dynamic Preferred-Slot Swap (Background)\nSequence Diagram (UC-004 | FR-021 – FR-025)
+
+participant "Appointment\nService" as ApptSvc
+participant "Slot-Swap\nEngine\n(Windows Service)" as SlotSwap
+database "PostgreSQL" as DB
+database "Redis\n(Atomic Lock)" as Redis
+participant "Email Provider" as Email
+participant "SMS Provider" as SMS
+participant "Audit Service" as Audit
+actor "Patient" as P
+
+== Slot-Free Trigger ==
+note over ApptSvc
+  A patient cancels or reschedules,
+  freeing an appointment slot.
+end note
+
+ApptSvc -> DB  : UPDATE slot SET is_available = true\nWHERE slot_id = :freedSlotId
+ApptSvc -> DB  : UPDATE appointment SET status = CANCELLED (or RESCHEDULED)
+ApptSvc -> SlotSwap : Publish SlotFreedEvent { freedSlotId, timestamp }
+ApptSvc -> Audit    : LOG cancellation / reschedule event
+
+== Waitlist Query ==
+SlotSwap -> DB : SELECT waitlist_entries\nWHERE preferred_slot_id = :freedSlotId\n  AND is_active = true\nORDER BY created_at ASC\nLIMIT 1
+DB --> SlotSwap : waitlistEntry (patientId, currentAppointmentId)
+
+alt No waitlisted patients for this slot
+  note over SlotSwap
+    Slot remains in available pool.
+    No swap required.
+  end note
+end
+
+== Atomic Slot Reservation (FR-025) ==
+SlotSwap -> Redis : SETNX slot_lock:{freedSlotId} {patientId} EX 30
+Redis --> SlotSwap : 1 (lock acquired) OR 0 (race — another process won)
+
+alt Lock not acquired (concurrent swap for same slot)
+  note over SlotSwap
+    Another process acquired the lock.
+    Exit — no double-booking.
+  end note
+end
+
+== Swap Execution (≤ 60 s from trigger — FR-024) ==
+SlotSwap -> DB  : BEGIN TRANSACTION
+SlotSwap -> DB  : UPDATE appointments\nSET slot_id = :freedSlotId,\n    status = CONFIRMED\nWHERE appointment_id = :currentAppointmentId
+SlotSwap -> DB  : UPDATE appointment_slots\nSET is_available = false\nWHERE slot_id = :freedSlotId
+SlotSwap -> DB  : UPDATE appointment_slots\nSET is_available = true\nWHERE slot_id = :oldSlotId   ← release old slot (FR-022)
+SlotSwap -> DB  : UPDATE waitlist_entries\nSET is_active = false\nWHERE waitlist_id = :waitlistId
+SlotSwap -> DB  : COMMIT TRANSACTION
+
+SlotSwap -> Redis : DEL slot_lock:{freedSlotId}
+
+== Patient Notification (FR-023) ==
+SlotSwap -> Email : SendSwapNotification(patient, newSlot)
+note right of Email
+  Email contains: new date, time,
+  provider, location, reference.
+end note
+SlotSwap -> SMS  : SendSwapSMS(patient.phone, newSlot)
+
+== Audit ==
+SlotSwap -> Audit : LOG slot_swap_completed\n{ actor: SYSTEM, patientId, oldSlotId,\n  newSlotId, waitlistId, timestamp }
+
+Audit -> DB   : INSERT audit_log (append-only)
+
+== Patient Receives Notification ==
+Email --> P   : Slot upgrade email
+SMS   --> P   : SMS with new appointment details
+
+@enduml

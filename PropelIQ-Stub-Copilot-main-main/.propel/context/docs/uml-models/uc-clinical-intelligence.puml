@@ -1,0 +1,49 @@
+@startuml uc-clinical-intelligence
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBackgroundColor #FFF8E7
+skinparam usecaseBorderColor #D4870A
+
+title Clinical Data Aggregation & Medical Coding\nUse Case Detail
+
+actor Patient
+actor Staff
+actor ":AI Engine\n(System)" as AI <<system>>
+
+rectangle "Document Upload & Extraction [UC-007]" {
+  usecase "Upload Clinical Document\n[FR-071, FR-072]" as UPLOAD
+  usecase "Extract Clinical Fields\n[FR-073, FR-074]" as EXTRACT
+  usecase "De-duplicate Data\n[FR-077]" as DEDUP
+  usecase "Detect Conflicts\n[FR-078]" as CONFLICT
+  usecase "Staff Review & Accept\n[FR-075]" as REVIEW
+  usecase "Generate 360° Patient View\n[FR-079]" as VIEW360
+}
+
+rectangle "Medical Coding [UC-008]" {
+  usecase "Suggest ICD-10 Codes\n[FR-091]" as ICD
+  usecase "Suggest CPT Codes\n[FR-092]" as CPT
+  usecase "Staff Code Review\n[FR-094]" as CODEREVIEW
+  usecase "Finalize Coding Record\n[FR-095]" as FINALIZE
+}
+
+Patient --> UPLOAD
+Staff --> UPLOAD
+
+UPLOAD --> EXTRACT
+AI --> EXTRACT
+EXTRACT --> DEDUP
+DEDUP --> CONFLICT
+CONFLICT --> REVIEW
+REVIEW --> VIEW360
+
+VIEW360 --> ICD : <<triggers>>
+VIEW360 --> CPT : <<triggers>>
+AI --> ICD
+AI --> CPT
+
+ICD --> CODEREVIEW
+CPT --> CODEREVIEW
+Staff --> CODEREVIEW
+CODEREVIEW --> FINALIZE
+
+@enduml

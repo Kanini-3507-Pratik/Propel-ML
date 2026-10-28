@@ -1,0 +1,287 @@
+@startuml erd
+!theme plain
+skinparam classBackgroundColor #EDF4FF
+skinparam classBorderColor #4A90D9
+skinparam classAttributeIconSize 0
+skinparam arrowColor #4A90D9
+skinparam packageStyle rectangle
+skinparam linetype ortho
+
+title Unified Patient Access & Clinical Intelligence Platform\nEntity Relationship Diagram (Logical)
+
+' ─────────────────────────────────────────────
+' Identity
+' ─────────────────────────────────────────────
+entity "users" as users {
+  * user_id : UUID <<PK>>
+  --
+  * email : VARCHAR(255) <<UNIQUE>>
+  * password_hash : VARCHAR(255)
+  * role : ENUM(PATIENT, STAFF, ADMIN)
+  * is_active : BOOLEAN
+  * created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+}
+
+entity "patients" as patients {
+  * user_id : UUID <<PK, FK → users>>
+  --
+  * first_name : VARCHAR(100)
+  * last_name : VARCHAR(100)
+  * date_of_birth : DATE
+  * phone : VARCHAR(20)
+}
+
+entity "staff_profiles" as staff_profiles {
+  * user_id : UUID <<PK, FK → users>>
+  --
+  * username : VARCHAR(50) <<UNIQUE>>
+  * display_name : VARCHAR(150)
+}
+
+' ─────────────────────────────────────────────
+' Scheduling
+' ─────────────────────────────────────────────
+entity "appointment_slots" as appointment_slots {
+  * slot_id : UUID <<PK>>
+  --
+  * specialty : VARCHAR(100)
+  * provider_name : VARCHAR(150)
+  * start_time : TIMESTAMPTZ
+  * end_time : TIMESTAMPTZ
+  * is_available : BOOLEAN
+    created_at : TIMESTAMPTZ
+}
+
+entity "appointments" as appointments {
+  * appointment_id : UUID <<PK>>
+  --
+  * patient_id : UUID <<FK → patients>>
+  * slot_id : UUID <<FK → appointment_slots>>
+    staff_id : UUID <<FK → staff_profiles>>
+  * reference_number : VARCHAR(20) <<UNIQUE>>
+  * booking_type : ENUM(ONLINE, WALK_IN)
+  * status : ENUM(CONFIRMED, CANCELLED, RESCHEDULED,\n  WALKED_IN, ARRIVED, NO_SHOW)
+  * created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+}
+
+entity "waitlist_entries" as waitlist_entries {
+  * waitlist_id : UUID <<PK>>
+  --
+  * patient_id : UUID <<FK → patients>>
+  * preferred_slot_id : UUID <<FK → appointment_slots>>
+  * current_appointment_id : UUID <<FK → appointments>>
+  * is_active : BOOLEAN
+  * created_at : TIMESTAMPTZ
+}
+
+entity "no_show_risk_scores" as risk_scores {
+  * risk_id : UUID <<PK>>
+  --
+  * appointment_id : UUID <<FK → appointments>>
+  * risk_score : INTEGER
+  * prior_no_shows : INTEGER
+  * lead_time_days : INTEGER
+  * insurance_status : VARCHAR(20)
+  * calculated_at : TIMESTAMPTZ
+}
+
+entity "reminders" as reminders {
+  * reminder_id : UUID <<PK>>
+  --
+  * appointment_id : UUID <<FK → appointments>>
+  * reminder_type : ENUM(EMAIL_24H, SMS_2H, CONFIRMATION)
+  * scheduled_at : TIMESTAMPTZ
+    sent_at : TIMESTAMPTZ
+  * status : ENUM(PENDING, SENT, FAILED)
+}
+
+' ─────────────────────────────────────────────
+' Intake
+' ─────────────────────────────────────────────
+entity "intake_forms" as intake_forms {
+  * intake_id : UUID <<PK>>
+  --
+  * patient_id : UUID <<FK → patients>>
+  * appointment_id : UUID <<FK → appointments>>
+  * mode : ENUM(AI_CONVERSATIONAL, MANUAL_FORM)
+    chief_complaint : TEXT
+    current_medications : TEXT
+    known_allergies : TEXT
+    prior_diagnoses : TEXT
+    surgical_history : TEXT
+    emergency_contact : VARCHAR(250)
+  * is_complete : BOOLEAN
+  * last_saved_at : TIMESTAMPTZ
+    submitted_at : TIMESTAMPTZ
+}
+
+' ─────────────────────────────────────────────
+' Insurance
+' ─────────────────────────────────────────────
+entity "insurance_entries" as insurance_entries {
+  * entry_id : UUID <<PK>>
+  --
+  * patient_id : UUID <<FK → patients>>
+  * appointment_id : UUID <<FK → appointments>>
+  * provider_name : VARCHAR(150)
+  * member_id : VARCHAR(50)
+  * validation_status : ENUM(VERIFIED, NOT_FOUND, MISMATCH)
+  * validated_at : TIMESTAMPTZ
+}
+
+entity "dummy_insurance_records" as dummy_insurance {
+  * record_id : UUID <<PK>>
+  --
+  * provider_name : VARCHAR(150)
+  * member_id : VARCHAR(50)
+  * holder_name : VARCHAR(150)
+}
+
+' ─────────────────────────────────────────────
+' Clinical Documents
+' ─────────────────────────────────────────────
+entity "clinical_documents" as clinical_documents {
+  * document_id : UUID <<PK>>
+  --
+  * patient_id : UUID <<FK → patients>>
+    uploaded_by_user_id : UUID <<FK → users>>
+  * file_path : VARCHAR(500)
+  * upload_type : ENUM(PATIENT_UPLOAD, STAFF_NOTE)
+  * status : ENUM(PENDING, EXTRACTED, REVIEWED, ERROR)
+  * uploaded_at : TIMESTAMPTZ
+}
+
+entity "extracted_fields" as extracted_fields {
+  * field_id : UUID <<PK>>
+  --
+  * document_id : UUID <<FK → clinical_documents>>
+    reviewed_by_user_id : UUID <<FK → users>>
+  * field_name : VARCHAR(100)
+  * field_value : TEXT
+  * confidence_level : ENUM(HIGH, LOW)
+  * is_accepted : BOOLEAN
+    reviewed_at : TIMESTAMPTZ
+    override_value : TEXT
+}
+
+entity "conflict_alerts" as conflict_alerts {
+  * alert_id : UUID <<PK>>
+  --
+  * patient_id : UUID <<FK → patients>>
+  * field_name : VARCHAR(100)
+  * document_a_id : UUID <<FK → clinical_documents>>
+  * document_b_id : UUID <<FK → clinical_documents>>
+  * value_a : TEXT
+  * value_b : TEXT
+  * is_acknowledged : BOOLEAN
+    acknowledged_by : UUID <<FK → users>>
+    acknowledged_at : TIMESTAMPTZ
+}
+
+entity "patient_records" as patient_records {
+  * record_id : UUID <<PK>>
+  --
+  * patient_id : UUID <<FK → patients, UNIQUE>>
+  * vitals_history : JSONB
+  * medication_list : JSONB
+  * diagnoses_list : JSONB
+  * allergies_list : JSONB
+  * visit_timeline : JSONB
+  * last_updated : TIMESTAMPTZ
+}
+
+' ─────────────────────────────────────────────
+' Medical Coding
+' ─────────────────────────────────────────────
+entity "medical_coding_sessions" as coding_sessions {
+  * session_id : UUID <<PK>>
+  --
+  * patient_id : UUID <<FK → patients>>
+  * reviewed_by_staff_id : UUID <<FK → staff_profiles>>
+  * created_at : TIMESTAMPTZ
+    finalized_at : TIMESTAMPTZ
+    agreement_rate : DECIMAL(5,2)
+}
+
+entity "code_suggestions" as code_suggestions {
+  * suggestion_id : UUID <<PK>>
+  --
+  * session_id : UUID <<FK → medical_coding_sessions>>
+  * code_type : ENUM(ICD10, CPT)
+  * code_value : VARCHAR(20)
+  * description : VARCHAR(500)
+  * confidence : DECIMAL(5,2)
+    source_snippet : TEXT
+  * status : ENUM(ACCEPTED, REJECTED, OVERRIDDEN, MANUAL)
+    override_code : VARCHAR(20)
+    override_reason : TEXT
+}
+
+' ─────────────────────────────────────────────
+' Audit
+' ─────────────────────────────────────────────
+entity "audit_logs" as audit_logs {
+  * log_id : UUID <<PK>>
+  --
+  * actor_id : UUID <<FK → users>>
+  * actor_role : ENUM(PATIENT, STAFF, ADMIN, SYSTEM)
+  * action_type : VARCHAR(100)
+  * entity_type : VARCHAR(100)
+  * entity_id : UUID
+  * changed_fields : JSONB
+  * timestamp : TIMESTAMPTZ
+}
+
+note bottom of audit_logs
+  Append-only table.
+  No UPDATE or DELETE permitted.
+  Enforced via DB trigger / row-level policy.
+end note
+
+' ─────────────────────────────────────────────
+' Relationships
+' ─────────────────────────────────────────────
+
+' Identity
+users ||--o| patients        : "extends (1-to-0..1)"
+users ||--o| staff_profiles  : "extends (1-to-0..1)"
+
+' Scheduling
+patients            ||--o{ appointments         : "has"
+appointment_slots   ||--o{ appointments         : "fills"
+staff_profiles      ||--o{ appointments         : "creates (walk-in)"
+appointments        ||--o| waitlist_entries     : "linked current booking"
+patients            ||--o{ waitlist_entries     : "holds"
+appointment_slots   ||--o{ waitlist_entries     : "preferred slot"
+appointments        ||--o| risk_scores          : "scored by"
+appointments        ||--o{ reminders            : "triggers"
+
+' Intake
+patients            ||--o{ intake_forms         : "completes"
+appointments        ||--o| intake_forms         : "associated with"
+
+' Insurance
+patients            ||--o{ insurance_entries    : "provides"
+appointments        ||--o| insurance_entries    : "validated for"
+
+' Clinical
+patients            ||--o{ clinical_documents   : "owns"
+users               ||--o{ clinical_documents   : "uploads"
+clinical_documents  ||--o{ extracted_fields     : "yields"
+users               ||--o{ extracted_fields     : "reviews"
+patients            ||--o{ conflict_alerts      : "has"
+clinical_documents  ||--o{ conflict_alerts      : "source A/B"
+users               ||--o{ conflict_alerts      : "acknowledges"
+patients            ||--|| patient_records      : "has one"
+
+' Medical Coding
+patients            ||--o{ coding_sessions      : "subject of"
+staff_profiles      ||--o{ coding_sessions      : "reviews"
+coding_sessions     ||--o{ code_suggestions     : "contains"
+
+' Audit
+users               ||--o{ audit_logs           : "generates"
+
+@enduml

@@ -1,0 +1,96 @@
+@startuml seq-medical-coding
+!theme plain
+skinparam sequenceArrowColor #7B2FBE
+skinparam sequenceParticipantBackgroundColor #F9F0FF
+skinparam sequenceParticipantBorderColor #7B2FBE
+skinparam sequenceActorBackgroundColor #F0FFF4
+skinparam sequenceActorBorderColor #2E8B57
+skinparam sequenceGroupBackgroundColor #FFFBE6
+skinparam noteBackgroundColor #FFFBE6
+skinparam noteBorderColor #D4870A
+
+title Medical Coding Review & Approval\nSequence Diagram (UC-008 | FR-091 – FR-096)
+
+actor "Staff" as Staff
+participant "SPA\n(Staff Dashboard)" as SPA
+participant "API Gateway" as GW
+participant "Medical\nCoding Service" as CodingSvc
+participant "NLP / AI\nCoding Engine" as NLP
+participant "Patient 360\nAggregator" as P360
+database "PostgreSQL" as DB
+participant "Audit Service" as Audit
+
+== Trigger Code Suggestion ==
+note over P360, CodingSvc
+  Triggered automatically after
+  Patient 360° record is updated
+  (post document extraction).
+end note
+
+P360 -> CodingSvc : TriggerCodeSuggestion(patientId)
+CodingSvc -> DB   : SELECT patient_records WHERE patientId
+DB --> CodingSvc  : aggregated patient record
+CodingSvc -> NLP  : GenerateSuggestions(patientRecord)
+
+NLP -> NLP : Analyse diagnoses → ICD-10 codes (FR-091)
+NLP -> NLP : Analyse procedures  → CPT codes (FR-092)
+NLP -> NLP : Attach confidence %, source snippet,\nextracted text per suggestion (FR-093)
+
+NLP --> CodingSvc : suggestions[]
+CodingSvc -> DB   : INSERT medical_coding_sessions (patientId, status=OPEN)
+CodingSvc -> DB   : INSERT code_suggestions\n  (sessionId, codeType, codeValue, description,\n   confidence, sourceSnippet, status=PENDING)
+CodingSvc -> Audit : LOG coding_session_created (sessionId, patientId)
+
+== Staff Opens Coding Panel ==
+Staff -> SPA   : Navigate to patient coding panel
+SPA  -> GW     : GET /coding/sessions/{patientId}/latest
+GW   -> CodingSvc : GetLatestSession(patientId)
+CodingSvc -> DB : SELECT coding_session + code_suggestions WHERE patientId
+DB  --> CodingSvc : session + suggestions
+CodingSvc --> GW  : session data
+GW  --> SPA       : 200 — suggestions (code, description,\nconfidence %, source snippet)
+SPA --> Staff     : Display ICD-10 and CPT suggestions\nwith confidence percentages and source text
+
+== Staff Reviews Each Suggestion ==
+loop For each code suggestion
+  Staff -> SPA : Accept / Override / Reject
+
+  alt Accept
+    SPA -> GW : PATCH /coding/suggestions/{suggestionId}\n{ action: "accept" }
+    GW -> CodingSvc : UpdateSuggestion(ACCEPTED)
+
+  else Override (change code)
+    Staff -> SPA : Enter replacement code + reason
+    SPA -> GW    : PATCH /coding/suggestions/{suggestionId}\n{ action: "override", overrideCode, reason }
+    GW -> CodingSvc : UpdateSuggestion(OVERRIDDEN, overrideCode, reason)
+
+  else Reject (with mandatory justification)
+    Staff -> SPA : Enter rejection justification
+    SPA -> GW    : PATCH /coding/suggestions/{suggestionId}\n{ action: "reject", reason }
+    GW -> CodingSvc : UpdateSuggestion(REJECTED, reason)
+  end
+
+  CodingSvc -> DB : UPDATE code_suggestions SET status = ...
+end
+
+opt Staff adds a manual code (not AI-suggested)
+  Staff -> SPA : Add manual code (codeType, codeValue, description)
+  SPA -> GW    : POST /coding/suggestions\n{ sessionId, codeType, codeValue, status: "manual" }
+  GW -> CodingSvc : AddManualCode(...)
+  CodingSvc -> DB : INSERT code_suggestions (status=MANUAL)
+end
+
+== Finalise Coding Record ==
+Staff -> SPA   : Submit final coding record
+SPA  -> GW     : POST /coding/sessions/{sessionId}/finalize
+GW   -> CodingSvc : FinalizeSession(sessionId, staffId)
+
+CodingSvc -> CodingSvc : Calculate AI-Human Agreement Rate\n(accepted / total non-manual suggestions) (FR-096)
+CodingSvc -> DB : UPDATE medical_coding_sessions\nSET status=FINALIZED, finalizedAt, agreementRate
+CodingSvc -> Audit : LOG coding_session_finalized\n{ sessionId, staffId, accepted, overridden,\n  rejected, manualAdded, agreementRate } (FR-095)
+
+CodingSvc --> GW : 200 — { sessionId, agreementRate }
+GW  --> SPA      : 200 — finalized
+SPA --> Staff    : "Coding record finalised." + agreement rate
+
+@enduml

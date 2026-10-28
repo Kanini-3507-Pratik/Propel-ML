@@ -1,0 +1,80 @@
+@startuml seq-authentication
+!theme plain
+skinparam sequenceArrowColor #4A90D9
+skinparam sequenceParticipantBackgroundColor #EDF4FF
+skinparam sequenceParticipantBorderColor #4A90D9
+skinparam sequenceActorBackgroundColor #F0FFF4
+skinparam sequenceActorBorderColor #2E8B57
+skinparam sequenceLifeLineBorderColor #4A90D9
+skinparam sequenceGroupBackgroundColor #FFFBE6
+skinparam noteBackgroundColor #FFFBE6
+skinparam noteBorderColor #D4870A
+
+title Authentication & Session Management\nSequence Diagram (UC-002 | FR-002 – FR-008)
+
+actor "User\n(Patient / Staff / Admin)" as User
+participant "SPA\n(Frontend)" as SPA
+participant "API Gateway\n(ASP.NET Core)" as GW
+participant "Auth Service" as Auth
+database "PostgreSQL\n(users)" as DB
+database "Redis\n(Sessions)" as Redis
+participant "Audit Service" as Audit
+
+== Login Flow ==
+User -> SPA       : Enter email + password\nand submit
+SPA  -> GW        : POST /auth/login\n{ email, password }
+GW   -> Auth      : Authenticate(email, password)
+Auth -> DB        : SELECT user WHERE email = ?
+DB   --> Auth     : user record (passwordHash, role, isActive)
+
+alt Account deactivated
+  Auth --> GW     : 401 — Account disabled
+  GW   --> SPA    : 401 — Account disabled
+  SPA  --> User   : "Account is disabled.\nContact your administrator."
+
+else Invalid credentials
+  Auth --> GW     : 401 — Invalid credentials
+  GW   --> SPA    : 401
+  SPA  --> User   : "Invalid credentials." (generic)
+  Auth -> Audit   : LOG failed_login (actor, timestamp, IP)
+
+else Credentials valid
+  Auth -> Auth    : bcrypt.verify(password, hash)
+  Auth -> Redis   : SET session:{sessionId} { userId, role }\nEX 900 (15 min TTL)
+  Auth --> GW     : 200 — { sessionToken, role }
+  GW   --> SPA    : 200 — { sessionToken, role }
+  SPA  -> SPA     : Store token (memory / httpOnly cookie)
+  SPA  --> User   : Redirect to role dashboard
+  Auth -> Audit   : LOG login_success (actor, timestamp)
+end
+
+== Authenticated Request ==
+User -> SPA      : Perform action
+SPA  -> GW       : Request + Authorization: Bearer <token>
+GW   -> Redis    : GET session:{sessionId}
+Redis --> GW     : { userId, role } OR nil
+
+alt Session expired / not found
+  GW --> SPA     : 401 — Session expired
+  SPA --> User   : Redirect to login + "Session timed out"
+  Auth -> Audit  : LOG session_timeout (actor, timestamp)
+
+else Session valid — role not authorised for endpoint
+  GW --> SPA     : 403 — Forbidden
+  SPA --> User   : "Access denied."
+
+else Session valid — authorised
+  GW -> GW       : Slide TTL: EXPIRE session:{sessionId} 900
+  GW -> GW       : Route to appropriate service
+  GW --> SPA     : 200 — response payload
+end
+
+== Logout ==
+User -> SPA      : Click "Log Out"
+SPA  -> GW       : POST /auth/logout
+GW   -> Redis    : DEL session:{sessionId}
+GW   -> Audit    : LOG logout (actor, timestamp)
+GW   --> SPA     : 200 — OK
+SPA  --> User    : Redirect to login page
+
+@enduml

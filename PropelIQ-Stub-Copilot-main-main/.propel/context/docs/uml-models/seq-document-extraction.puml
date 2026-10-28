@@ -1,0 +1,103 @@
+@startuml seq-document-extraction
+!theme plain
+skinparam sequenceArrowColor #D4870A
+skinparam sequenceParticipantBackgroundColor #FFF8E7
+skinparam sequenceParticipantBorderColor #D4870A
+skinparam sequenceActorBackgroundColor #F0FFF4
+skinparam sequenceActorBorderColor #2E8B57
+skinparam sequenceGroupBackgroundColor #FFFBE6
+skinparam noteBackgroundColor #FFFBE6
+skinparam noteBorderColor #D4870A
+
+title Clinical Document Upload & Data Extraction\nSequence Diagram (UC-007 | FR-071 – FR-080)
+
+actor "Patient / Staff" as Uploader
+actor "Staff" as Staff
+participant "SPA\n(Frontend)" as SPA
+participant "API Gateway" as GW
+participant "Document\nProcessing Service" as DocSvc
+participant "NLP / AI\nExtraction Engine\n(Windows Service)" as NLP
+participant "Patient 360\nAggregator" as P360
+database "PostgreSQL" as DB
+database "File Storage\n(PDFs)" as FileStore
+participant "Audit Service" as Audit
+
+== Document Upload ==
+Uploader -> SPA  : Select + upload PDF file
+SPA -> GW        : POST /documents/upload\n(multipart/form-data, patientId)
+GW  -> DocSvc    : UploadDocument(patientId, file)
+
+DocSvc -> DocSvc : Validate: format = PDF, size ≤ limit
+alt Corrupt / unsupported file
+  DocSvc --> GW  : 400 — Invalid file
+  GW  --> SPA    : 400 — "Unsupported or unreadable file.\nPlease retry."
+  DocSvc -> Audit : LOG upload_failed (actor, patientId)
+end
+
+DocSvc -> FileStore : Store encrypted PDF → filePath
+DocSvc -> DB        : INSERT clinical_documents\n(patientId, filePath, status=PENDING)
+DocSvc -> Audit     : LOG document_uploaded (actor, documentId)
+DocSvc --> GW       : 202 Accepted — { documentId }
+GW  --> SPA         : 202 — "Document queued for processing."
+
+== Async Extraction (NLP Engine) ==
+DocSvc -> NLP : EnqueueExtraction(documentId, filePath)
+
+NLP -> FileStore    : Fetch PDF
+NLP -> NLP          : Parse PDF text (open-source NLP)
+NLP -> NLP          : Extract fields:\n  vitals (BP, HR, weight, height)\n  current medications\n  diagnoses\n  allergies\n  visit dates
+NLP -> NLP          : Assign confidence level\n  (HIGH / LOW) per field
+NLP -> DB           : INSERT extracted_fields\n  (documentId, fieldName, value, confidence)
+NLP -> DB           : UPDATE clinical_documents\nSET status = EXTRACTED
+NLP -> Audit        : LOG extraction_completed (documentId)
+
+== De-duplication & Conflict Detection ==
+NLP -> P360         : TriggerAggregation(patientId)
+P360 -> DB          : SELECT all extracted_fields WHERE patient\nand existing patient_records
+P360 -> P360        : De-duplicate: retain most recent\nnon-conflicting value (FR-077)
+P360 -> P360        : Detect critical conflicts:\n  same field, different values across docs
+opt Conflicts found
+  P360 -> DB : INSERT conflict_alerts (fieldName, docA, docB, valueA, valueB)
+  P360 -> Audit : LOG conflict_detected (patientId, fieldName)
+end
+
+== Staff Review Panel ==
+Staff -> SPA         : Open extraction review panel for patient
+SPA  -> GW           : GET /documents/{patientId}/review
+GW   -> DocSvc       : GetReviewPanel(patientId)
+DocSvc -> DB         : SELECT extracted_fields WHERE patientId AND is_accepted = false
+DocSvc -> DB         : SELECT conflict_alerts WHERE patientId AND is_acknowledged = false
+DB   --> DocSvc      : extracted fields + conflict alerts
+DocSvc --> GW        : review data
+GW   --> SPA         : 200 — extracted fields (with confidence) + conflict alerts
+SPA  --> Staff       : Display extraction review panel\n(HIGH fields in green, LOW fields in yellow)
+
+== Staff Accepts / Corrects Fields ==
+loop For each extracted field
+  Staff -> SPA : Accept field OR enter corrected value
+end
+
+opt Conflict alert present
+  Staff -> SPA : Acknowledge conflict (explicit confirm)
+  SPA  -> GW   : PATCH /documents/conflicts/{alertId}/acknowledge
+  GW   -> DocSvc : AcknowledgeConflict(alertId, staffId)
+  DocSvc -> DB : UPDATE conflict_alerts SET is_acknowledged = true
+  DocSvc -> Audit : LOG conflict_acknowledged (staffId, alertId)
+end
+
+SPA -> GW  : PATCH /documents/{documentId}/review\n{ acceptedFields[], overrides{} }
+GW  -> DocSvc : CommitReview(documentId, staffId, decisions)
+DocSvc -> DB  : UPDATE extracted_fields SET is_accepted=true / override_value
+DocSvc -> DB  : UPDATE clinical_documents SET status = REVIEWED
+
+== Commit to 360° View ==
+DocSvc -> P360 : CommitToPatientRecord(patientId, acceptedFields)
+P360 -> DB     : UPDATE / INSERT patient_records (360° View)
+P360 -> Audit  : LOG patient_record_updated (staffId, patientId)
+
+DocSvc -> Audit : LOG fields_reviewed_committed (staffId, documentId)
+DocSvc --> GW   : 200 — OK
+GW  --> SPA     : 200 — "Extraction committed to patient record."
+SPA --> Staff   : Patient 360° View refreshed
+
+@enduml

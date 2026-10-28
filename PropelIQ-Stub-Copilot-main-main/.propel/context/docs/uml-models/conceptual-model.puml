@@ -1,0 +1,304 @@
+@startuml conceptual-model
+!theme plain
+skinparam classBackgroundColor #EDF4FF
+skinparam classBorderColor #4A90D9
+skinparam classAttributeIconSize 0
+skinparam arrowColor #4A90D9
+skinparam stereotypeCBackgroundColor #D0E8FF
+skinparam packageStyle rectangle
+
+title Unified Patient Access & Clinical Intelligence Platform\nConceptual Domain Model
+
+'─────────────────────────────────────────────
+' Identity & Access
+'─────────────────────────────────────────────
+package "Identity & Access" {
+  abstract class User {
+    + userId : UUID
+    + email : String
+    + passwordHash : String
+    + role : Role <<enum>>
+    + isActive : Boolean
+    + createdAt : DateTime
+  }
+
+  enum Role {
+    PATIENT
+    STAFF
+    ADMIN
+  }
+
+  class Patient {
+    + firstName : String
+    + lastName : String
+    + dateOfBirth : Date
+    + phone : String
+  }
+
+  class Staff {
+    + username : String
+    + displayName : String
+  }
+
+  class Admin {
+    + username : String
+  }
+
+  User <|-- Patient
+  User <|-- Staff
+  User <|-- Admin
+  User ..> Role
+}
+
+'─────────────────────────────────────────────
+' Scheduling
+'─────────────────────────────────────────────
+package "Scheduling" {
+  class AppointmentSlot {
+    + slotId : UUID
+    + specialty : String
+    + providerName : String
+    + startTime : DateTime
+    + endTime : DateTime
+    + isAvailable : Boolean
+  }
+
+  class Appointment {
+    + appointmentId : UUID
+    + referenceNumber : String
+    + bookingType : BookingType <<enum>>
+    + status : AppointmentStatus <<enum>>
+    + createdAt : DateTime
+  }
+
+  enum AppointmentStatus {
+    CONFIRMED
+    CANCELLED
+    RESCHEDULED
+    WALKED_IN
+    ARRIVED
+    NO_SHOW
+  }
+
+  enum BookingType {
+    ONLINE
+    WALK_IN
+  }
+
+  class WaitlistEntry {
+    + waitlistId : UUID
+    + createdAt : DateTime
+    + isActive : Boolean
+  }
+
+  class NoShowRisk {
+    + riskScore : Integer
+    + priorNoShows : Integer
+    + leadTimeDays : Integer
+    + insuranceStatus : String
+    + calculatedAt : DateTime
+  }
+
+  class Reminder {
+    + reminderId : UUID
+    + reminderType : ReminderType <<enum>>
+    + scheduledAt : DateTime
+    + sentAt : DateTime
+    + status : String
+  }
+
+  enum ReminderType {
+    EMAIL_24H
+    SMS_2H
+    CONFIRMATION
+  }
+
+  Appointment "many" --> "1" AppointmentSlot
+  Appointment "many" --> "1" Patient
+  Appointment "0..1" --> "0..1" Staff : created by (walk-in)
+  WaitlistEntry "many" --> "1" Patient
+  WaitlistEntry "many" --> "1" AppointmentSlot : preferred
+  WaitlistEntry "1" --> "1" Appointment : linked current booking
+  NoShowRisk "1" --> "1" Appointment
+  Reminder "many" --> "1" Appointment
+}
+
+'─────────────────────────────────────────────
+' Intake
+'─────────────────────────────────────────────
+package "Patient Intake" {
+  class IntakeForm {
+    + intakeId : UUID
+    + mode : IntakeMode <<enum>>
+    + chiefComplaint : String
+    + currentMedications : String
+    + knownAllergies : String
+    + priorDiagnoses : String
+    + surgicalHistory : String
+    + emergencyContact : String
+    + isComplete : Boolean
+    + lastSavedAt : DateTime
+  }
+
+  enum IntakeMode {
+    AI_CONVERSATIONAL
+    MANUAL_FORM
+  }
+
+  IntakeForm "0..1" --> "1" Patient
+  IntakeForm "0..1" --> "1" Appointment
+  IntakeForm ..> IntakeMode
+}
+
+'─────────────────────────────────────────────
+' Insurance
+'─────────────────────────────────────────────
+package "Insurance" {
+  class InsuranceEntry {
+    + entryId : UUID
+    + providerName : String
+    + memberId : String
+    + validationStatus : ValidationStatus <<enum>>
+    + validatedAt : DateTime
+  }
+
+  enum ValidationStatus {
+    VERIFIED
+    NOT_FOUND
+    MISMATCH
+  }
+
+  class DummyInsuranceRecord {
+    + recordId : UUID
+    + providerName : String
+    + memberId : String
+    + holderName : String
+  }
+
+  InsuranceEntry "0..1" --> "1" Appointment
+  InsuranceEntry ..> ValidationStatus
+  InsuranceEntry ..> DummyInsuranceRecord : validated against
+}
+
+'─────────────────────────────────────────────
+' Clinical Documents
+'─────────────────────────────────────────────
+package "Clinical Intelligence" {
+  class ClinicalDocument {
+    + documentId : UUID
+    + filePath : String
+    + uploadedAt : DateTime
+    + uploadedBy : Role
+    + status : DocStatus <<enum>>
+  }
+
+  enum DocStatus {
+    PENDING
+    EXTRACTED
+    REVIEWED
+    ERROR
+  }
+
+  class ExtractedField {
+    + fieldId : UUID
+    + fieldName : String
+    + fieldValue : String
+    + confidenceLevel : ConfidenceLevel <<enum>>
+    + isAccepted : Boolean
+    + reviewedAt : DateTime
+  }
+
+  enum ConfidenceLevel {
+    HIGH
+    LOW
+  }
+
+  class ConflictAlert {
+    + alertId : UUID
+    + fieldName : String
+    + valueA : String
+    + valueB : String
+    + isAcknowledged : Boolean
+  }
+
+  class PatientRecord360 {
+    + recordId : UUID
+    + vitalsHistory : JSON
+    + medicationList : JSON
+    + diagnosesList : JSON
+    + allergiesList : JSON
+    + visitTimeline : JSON
+    + lastUpdated : DateTime
+  }
+
+  ClinicalDocument "many" --> "1" Patient
+  ClinicalDocument "0..1" --> "0..1" Staff : reviewed by
+  ExtractedField "many" --> "1" ClinicalDocument
+  ConflictAlert "many" --> "1" Patient
+  ConflictAlert "1" --> "2" ClinicalDocument : conflicting sources
+  PatientRecord360 "1" --> "1" Patient
+  PatientRecord360 "1" o-- "many" ExtractedField : aggregated from
+}
+
+'─────────────────────────────────────────────
+' Medical Coding
+'─────────────────────────────────────────────
+package "Medical Coding" {
+  class MedicalCodingSession {
+    + sessionId : UUID
+    + createdAt : DateTime
+    + finalizedAt : DateTime
+    + agreementRate : Decimal
+  }
+
+  class CodeSuggestion {
+    + suggestionId : UUID
+    + codeType : CodeType <<enum>>
+    + codeValue : String
+    + description : String
+    + confidence : Decimal
+    + sourceSnippet : String
+    + status : CodeStatus <<enum>>
+  }
+
+  enum CodeType {
+    ICD10
+    CPT
+  }
+
+  enum CodeStatus {
+    ACCEPTED
+    REJECTED
+    OVERRIDDEN
+    MANUAL
+  }
+
+  MedicalCodingSession "many" --> "1" Patient
+  MedicalCodingSession "many" --> "1" Staff : reviewed by
+  MedicalCodingSession "1" o-- "many" CodeSuggestion
+  CodeSuggestion ..> CodeType
+  CodeSuggestion ..> CodeStatus
+}
+
+'─────────────────────────────────────────────
+' Audit
+'─────────────────────────────────────────────
+package "Audit" {
+  class AuditLogEntry {
+    + logId : UUID
+    + actorId : UUID
+    + actorRole : Role
+    + actionType : String
+    + entityType : String
+    + entityId : UUID
+    + changedFields : JSON
+    + timestamp : DateTime
+  }
+
+  note bottom of AuditLogEntry
+    Write-once. No updates or
+    deletes permitted for any role.
+  end note
+}
+
+@enduml

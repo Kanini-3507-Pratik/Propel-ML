@@ -1,0 +1,97 @@
+@startuml seq-appointment-booking
+!theme plain
+skinparam sequenceArrowColor #4A90D9
+skinparam sequenceParticipantBackgroundColor #EDF4FF
+skinparam sequenceParticipantBorderColor #4A90D9
+skinparam sequenceActorBackgroundColor #F0FFF4
+skinparam sequenceActorBorderColor #2E8B57
+skinparam sequenceGroupBackgroundColor #FFFBE6
+skinparam noteBackgroundColor #FFFBE6
+skinparam noteBorderColor #D4870A
+
+title Patient Appointment Booking\nSequence Diagram (UC-003 | FR-011 – FR-017, FR-061 – FR-065)
+
+actor "Patient" as P
+participant "SPA\n(Patient Portal)" as SPA
+participant "API Gateway" as GW
+participant "Appointment\nService" as ApptSvc
+participant "Insurance\nValidation Service" as InsSvc
+participant "No-Show\nRisk Engine" as RiskEng
+participant "Reminder\nScheduler" as RemSvc
+database "PostgreSQL" as DB
+database "Redis\n(Slot Lock)" as Redis
+participant "Email Provider" as Email
+participant "Audit Service" as Audit
+
+== Search Available Slots ==
+P   -> SPA     : Select specialty, provider, date range
+SPA -> GW      : GET /appointments/slots?specialty=&provider=&dateFrom=&dateTo=
+GW  -> ApptSvc : SearchAvailableSlots(criteria)
+ApptSvc -> DB  : SELECT slots WHERE is_available = true AND ...
+DB  --> ApptSvc : available slot list
+ApptSvc --> GW : slot list
+GW  --> SPA    : 200 — slot list
+SPA --> P      : Display available slots
+
+== Select Slot & Validate ==
+P   -> SPA     : Select slot + (optionally) preferred slot
+SPA -> GW      : POST /appointments/book\n{ slotId, preferredSlotId?, insurance? }
+GW  -> ApptSvc : BookAppointment(patientId, slotId, ...)
+
+ApptSvc -> DB  : CHECK duplicate: same patient + provider + day
+alt Duplicate booking found (FR-017)
+  ApptSvc --> GW : 409 — Duplicate booking
+  GW --> SPA : 409 — Duplicate booking
+  SPA --> P  : "You already have a booking with this provider today."
+end
+
+== Insurance Soft-Check (FR-061 – FR-065) ==
+ApptSvc -> InsSvc : ValidateInsurance(providerName, memberId)
+InsSvc  -> DB     : SELECT FROM dummy_insurance WHERE provider=? AND member_id=?
+DB      --> InsSvc : match result
+InsSvc  --> ApptSvc : { status: VERIFIED | NOT_FOUND | MISMATCH }
+note right of InsSvc
+  Non-blocking soft check.
+  Booking proceeds regardless
+  of validation outcome. (FR-065)
+end note
+
+== Atomic Slot Reservation ==
+ApptSvc -> Redis  : SETNX slot_lock:{slotId} {patientId} EX 10
+Redis   --> ApptSvc : OK (lock acquired) OR 0 (already locked)
+
+alt Slot no longer available
+  ApptSvc -> Redis : DEL slot_lock:{slotId}
+  ApptSvc --> GW   : 409 — Slot no longer available
+  GW --> SPA : 409
+  SPA --> P  : "Slot just became unavailable. Please choose another."
+end
+
+== Persist Booking ==
+ApptSvc -> DB  : INSERT appointment (patientId, slotId, reference, status=CONFIRMED)
+ApptSvc -> DB  : UPDATE slot SET is_available = false
+ApptSvc -> Redis : DEL slot_lock:{slotId}
+DB  --> ApptSvc : appointment record
+
+== Preferred Slot Waitlist (FR-013) ==
+opt Patient selected a preferred slot
+  ApptSvc -> DB  : INSERT waitlist_entry\n(patientId, preferredSlotId, currentAppointmentId)
+end
+
+== No-Show Risk Computation (FR-035) ==
+ApptSvc -> RiskEng : ComputeRisk(patientId, appointmentId, insuranceStatus)
+RiskEng -> DB  : SELECT prior_no_shows, lead_time, insurance_status
+RiskEng --> ApptSvc : riskScore
+ApptSvc -> DB  : INSERT no_show_risk_scores
+
+== Confirmation & Reminders ==
+ApptSvc -> Email  : SendConfirmationEmail(patient, appointment, PDF)
+ApptSvc -> RemSvc : ScheduleReminders(appointmentId, appointmentTime)
+RemSvc  -> DB     : INSERT reminders (EMAIL_24H, SMS_2H)
+ApptSvc -> Audit  : LOG booking_confirmed (actor, appointmentId, slotId)
+
+ApptSvc --> GW : 201 — { appointmentId, referenceNumber, insuranceStatus }
+GW  --> SPA    : 201 — booking confirmed
+SPA --> P      : Show booking summary + reference number\n(insurance validation result displayed)
+
+@enduml
